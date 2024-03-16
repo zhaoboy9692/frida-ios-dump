@@ -33,20 +33,21 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 DUMP_JS = os.path.join(script_dir, 'dump.js')
 
 User = 'root'
-Password = 'alpine'
+Password = '1'
+RemoteHost = '0'
 Host = 'localhost'
 Port = 2222
 KeyFileName = None
-
+DumpLib = '1'
 TEMP_DIR = tempfile.gettempdir()
 PAYLOAD_DIR = 'Payload'
 PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
 file_dict = {}
-
+Bypass = True
 finished = threading.Event()
 
 
-def get_usb_iphone():
+def get_usb_iphone(remote_host):
     Type = 'usb'
     if int(frida.__version__.split('.')[0]) < 12:
         Type = 'tether'
@@ -57,7 +58,7 @@ def get_usb_iphone():
         changed.set()
 
     device_manager.on('changed', on_changed)
-
+    print()
     device = None
     while device is None:
         devices = [dev for dev in device_manager.enumerate_devices() if dev.type == Type]
@@ -65,7 +66,11 @@ def get_usb_iphone():
             print('Waiting for USB device...')
             changed.wait()
         else:
-            device = devices[0]
+            if remote_host == "0":
+                device = devices[0]
+            else:
+                print("RemoteHost", remote_host)
+                device = frida.get_device_manager().add_remote_device(remote_host)
 
     device_manager.off('changed', on_changed)
 
@@ -93,8 +98,9 @@ def generate_ipa(path, display_name):
         print(e)
         finished.set()
 
+
 def on_message(message, data):
-    t = tqdm(unit='B',unit_scale=True,unit_divisor=1024,miniters=1)
+    t = tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1)
     last_sent = [0]
 
     def progress(filename, size, sent):
@@ -116,7 +122,7 @@ def on_message(message, data):
             scp_from = dump_path
             scp_to = PAYLOAD_PATH + '/'
 
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress=progress, socket_timeout=60) as scp:
                 scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
@@ -134,7 +140,7 @@ def on_message(message, data):
 
             scp_from = app_path
             scp_to = PAYLOAD_PATH + '/'
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress=progress, socket_timeout=60) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
@@ -149,6 +155,7 @@ def on_message(message, data):
         if 'done' in payload:
             finished.set()
     t.close()
+
 
 def compare_applications(a, b):
     a_is_running = a.pid != 0
@@ -250,7 +257,7 @@ def create_dir(path):
         print(err)
 
 
-def open_target_app(device, name_or_bundleid):
+def open_target_app(device, name_or_bundleid, bypass):
     print('Start the target app {}'.format(name_or_bundleid))
 
     pid = ''
@@ -267,20 +274,21 @@ def open_target_app(device, name_or_bundleid):
         if not pid:
             pid = device.spawn([bundle_identifier])
             session = device.attach(pid)
-            device.resume(pid)
+            if not bypass:
+                device.resume(pid)
         else:
             session = device.attach(pid)
     except Exception as e:
-        print(e) 
+        print(e)
 
     return session, display_name, bundle_identifier
 
 
-def start_dump(session, ipa_name):
+def start_dump(session, ipa_name, dump_lib=1):
     print('Dumping {} to {}'.format(display_name, TEMP_DIR))
 
     script = load_js_file(session, DUMP_JS)
-    script.post('dump')
+    script.post(dump_lib)
     finished.wait()
 
     generate_ipa(PAYLOAD_PATH, ipa_name)
@@ -293,8 +301,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='frida-ios-dump (by AloneMonkey v2.0)')
     parser.add_argument('-l', '--list', dest='list_applications', action='store_true', help='List the installed apps')
     parser.add_argument('-o', '--output', dest='output_ipa', help='Specify name of the decrypted IPA')
+    parser.add_argument('-r', '--remote_host', dest='remote_host', help='connect host')
     parser.add_argument('-H', '--host', dest='ssh_host', help='Specify SSH hostname')
     parser.add_argument('-p', '--port', dest='ssh_port', help='Specify SSH port')
+    parser.add_argument('-d', '--dum_lib', dest='dump_lib', help='dump dylib? 1 or 0')
+    parser.add_argument('-b', '--bypass', dest='bypass', help='Bypass jb detection that crashes app on startup')
     parser.add_argument('-u', '--user', dest='ssh_user', help='Specify SSH username')
     parser.add_argument('-P', '--password', dest='ssh_password', help='Specify SSH password')
     parser.add_argument('-K', '--key_filename', dest='ssh_key_filename', help='Specify SSH private key file path')
@@ -308,8 +319,9 @@ if __name__ == '__main__':
     if not len(sys.argv[1:]):
         parser.print_help()
         sys.exit(exit_code)
-
-    device = get_usb_iphone()
+    if args.remote_host:
+        RemoteHost = args.remote_host
+    device = get_usb_iphone(RemoteHost)
 
     if args.list_applications:
         list_applications(device)
@@ -327,6 +339,11 @@ if __name__ == '__main__':
             Password = args.ssh_password
         if args.ssh_key_filename:
             KeyFileName = args.ssh_key_filename
+        if args.dump_lib:
+            DumpLib = args.dump_lib
+
+        if args.bypass:
+            Bypass = args.bypass
 
         try:
             ssh = paramiko.SSHClient()
@@ -334,12 +351,13 @@ if __name__ == '__main__':
             ssh.connect(Host, port=Port, username=User, password=Password, key_filename=KeyFileName)
 
             create_dir(PAYLOAD_PATH)
-            (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
+            (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid, Bypass)
             if output_ipa is None:
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
+            print("start dump-----------")
             if session:
-                start_dump(session, output_ipa)
+                start_dump(session, output_ipa, dump_lib=DumpLib)
         except paramiko.ssh_exception.NoValidConnectionsError as e:
             print(e)
             print('Try specifying -H/--hostname and/or -p/--port')

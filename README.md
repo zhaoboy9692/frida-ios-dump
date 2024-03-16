@@ -1,13 +1,19 @@
 # frida-ios-dump
-Pull a decrypted IPA from a jailbroken device
 
+Pull a decrypted IPA from a jailbroken device
 
 ## Usage
 
- 1. Install [frida](http://www.frida.re/) on device
- 2. `sudo pip install -r requirements.txt --upgrade`
- 3. Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22). e.g. `iproxy 2222 22`
- 4. Run ./dump.py `Display name` or `Bundle identifier`
+1. Install [frida](http://www.frida.re/) on device
+2. `sudo pip install -r requirements.txt --upgrade`
+3. Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22). e.g. `iproxy 2222 22`
+4. Run ./dump.py `Display name` or `Bundle identifier`
+
+## Additional Options (by zhaoboy):
+
+--remote(-r) : Connect to remote frida host
+--bypass(-b) : Bypass jb detection that crashes app on startup
+--dump_lib(-d) : dump dylib 1 or 0
 
 For SSH/SCP make sure you have your public key added to the target device's ~/.ssh/authorized_keys file.
 
@@ -43,7 +49,6 @@ Drag to [MonkeyDev](https://github.com/AloneMonkey/MonkeyDev), Happy hacking!
 ## Support
 
 Python 2.x and 3.x
-
 
 ### issues
 
